@@ -1,53 +1,79 @@
 export default async function (ctx) {
   const results = {
-    chatgpt: { name: "ChatGPT", status: "checking", color: "#8E8E93" },
-    gemini: { name: "Gemini", status: "checking", color: "#8E8E93" },
+    chatgpt: { name: "ChatGPT", status: "检测中", region: "--", color: "#8E8E93" },
+    gemini: { name: "Gemini", status: "检测中", region: "--", color: "#8E8E93" },
   };
 
+  // 获取 IP 区域信息
+  async function getRegion() {
+    try {
+      const resp = await ctx.http.get("https://ipinfo.io/json", { timeout: 5000 });
+      const data = await resp.json();
+      return data.country || "未知";
+    } catch {
+      return "未知";
+    }
+  }
+
   // 测试 ChatGPT 连通性
-  try {
-    const chatgptResp = await ctx.http.get("https://api.openai.com/v1/models", {
-      headers: {
-        Authorization: `Bearer ${ctx.env.OPENAI_API_KEY || "test"}`,
-      },
-      timeout: 10000,
-      redirect: "manual",
-    });
-    if (chatgptResp.status === 200 || chatgptResp.status === 401) {
-      results.chatgpt.status = "Available";
-      results.chatgpt.color = "#34C759";
-    } else {
-      results.chatgpt.status = `Error ${chatgptResp.status}`;
+  async function checkChatGPT() {
+    try {
+      const resp = await ctx.http.get("https://ios.chat.openai.com/public-api/mobile/server_status/v1", {
+        timeout: 10000,
+        redirect: "manual",
+      });
+      if (resp.status === 200) {
+        results.chatgpt.status = "已解锁";
+        results.chatgpt.color = "#34C759";
+      } else if (resp.status === 403) {
+        results.chatgpt.status = "未解锁";
+        results.chatgpt.color = "#FF3B30";
+      } else {
+        results.chatgpt.status = "异常";
+        results.chatgpt.color = "#FF9500";
+      }
+    } catch {
+      results.chatgpt.status = "失败";
       results.chatgpt.color = "#FF3B30";
     }
-  } catch (e) {
-    results.chatgpt.status = "Failed";
-    results.chatgpt.color = "#FF3B30";
   }
 
   // 测试 Gemini 连通性
-  try {
-    const geminiResp = await ctx.http.get(
-      "https://generativelanguage.googleapis.com/v1/models",
-      {
+  async function checkGemini() {
+    try {
+      const resp = await ctx.http.get("https://generativelanguage.googleapis.com/v1/models", {
         timeout: 10000,
         redirect: "manual",
+      });
+      if (resp.status === 200 || resp.status === 401) {
+        results.gemini.status = "已解锁";
+        results.gemini.color = "#34C759";
+      } else if (resp.status === 403) {
+        results.gemini.status = "未解锁";
+        results.gemini.color = "#FF3B30";
+      } else {
+        results.gemini.status = "异常";
+        results.gemini.color = "#FF9500";
       }
-    );
-    if (geminiResp.status === 200 || geminiResp.status === 401 || geminiResp.status === 403) {
-      results.gemini.status = "Available";
-      results.gemini.color = "#34C759";
-    } else {
-      results.gemini.status = `Error ${geminiResp.status}`;
+    } catch {
+      results.gemini.status = "失败";
       results.gemini.color = "#FF3B30";
     }
-  } catch (e) {
-    results.gemini.status = "Failed";
-    results.gemini.color = "#FF3B30";
   }
+
+  // 并行执行检测
+  const [region] = await Promise.all([
+    getRegion(),
+    checkChatGPT(),
+    checkGemini(),
+  ]);
+
+  results.chatgpt.region = region;
+  results.gemini.region = region;
 
   // 根据小组件尺寸返回不同布局
   if (ctx.widgetFamily === "accessoryCircular") {
+    const allOk = results.chatgpt.status === "已解锁" && results.gemini.status === "已解锁";
     return {
       type: "widget",
       children: [
@@ -59,9 +85,9 @@ export default async function (ctx) {
         },
         {
           type: "text",
-          text: results.chatgpt.status === "Available" && results.gemini.status === "Available" ? "OK" : "FAIL",
+          text: allOk ? "OK" : "FAIL",
           font: { size: "caption2" },
-          textColor: results.chatgpt.status === "Available" && results.gemini.status === "Available" ? "#34C759" : "#FF3B30",
+          textColor: allOk ? "#34C759" : "#FF3B30",
         },
       ],
     };
@@ -79,7 +105,7 @@ export default async function (ctx) {
           children: [
             { type: "text", text: "ChatGPT", font: { size: "footnote", weight: "medium" } },
             { type: "spacer" },
-            { type: "text", text: results.chatgpt.status, font: { size: "caption2" }, textColor: results.chatgpt.color },
+            { type: "text", text: `${results.chatgpt.status},${results.chatgpt.region}`, font: { size: "caption2" }, textColor: results.chatgpt.color },
           ],
         },
         {
@@ -90,7 +116,7 @@ export default async function (ctx) {
           children: [
             { type: "text", text: "Gemini", font: { size: "footnote", weight: "medium" } },
             { type: "spacer" },
-            { type: "text", text: results.gemini.status, font: { size: "caption2" }, textColor: results.gemini.color },
+            { type: "text", text: `${results.gemini.status},${results.gemini.region}`, font: { size: "caption2" }, textColor: results.gemini.color },
           ],
         },
       ],
@@ -124,7 +150,7 @@ export default async function (ctx) {
           },
           {
             type: "text",
-            text: "AI 连通性检测",
+            text: "AI 解锁检测",
             font: { size: "headline", weight: "bold" },
             textColor: "#FFFFFF",
           },
@@ -153,11 +179,10 @@ export default async function (ctx) {
                 text: "ChatGPT",
                 font: { size: "subheadline", weight: "medium" },
                 textColor: "#FFFFFF",
-                flex: 1,
               },
               {
                 type: "text",
-                text: results.chatgpt.status,
+                text: `${results.chatgpt.status},区域:${results.chatgpt.region}`,
                 font: { size: "subheadline", weight: "semibold" },
                 textColor: results.chatgpt.color,
               },
@@ -181,11 +206,10 @@ export default async function (ctx) {
                 text: "Gemini",
                 font: { size: "subheadline", weight: "medium" },
                 textColor: "#FFFFFF",
-                flex: 1,
               },
               {
                 type: "text",
-                text: results.gemini.status,
+                text: `${results.gemini.status},区域:${results.gemini.region}`,
                 font: { size: "subheadline", weight: "semibold" },
                 textColor: results.gemini.color,
               },

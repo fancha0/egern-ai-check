@@ -4,12 +4,13 @@ export default async function (ctx) {
     gemini: { name: "Gemini", status: "检测中", region: "--", color: "#8E8E93" },
   };
 
-  // 获取 IP 区域信息
-  async function getRegion() {
+  // 获取 IP 区域信息（Egern 内置 API，无外部依赖）
+  function getRegion() {
     try {
-      const resp = await ctx.http.get("https://ipinfo.io/json", { timeout: 5000 });
-      const data = await resp.json();
-      return data.country || "未知";
+      const ip = ctx.device.ipv4.address;
+      if (!ip) return "未知";
+      const info = ctx.lookupIP(ip);
+      return info?.country || "未知";
     } catch {
       return "未知";
     }
@@ -18,18 +19,22 @@ export default async function (ctx) {
   // 测试 ChatGPT 连通性
   async function checkChatGPT() {
     try {
-      const resp = await ctx.http.get("https://ios.chat.openai.com/public-api/mobile/server_status/v1", {
+      const resp = await ctx.http.get("https://api.openai.com/v1/models", {
         timeout: 10000,
         redirect: "manual",
       });
       if (resp.status === 200) {
         results.chatgpt.status = "已解锁";
         results.chatgpt.color = "#34C759";
+      } else if (resp.status === 401) {
+        // 401 = 需要 API key，但能连通，说明网络可达
+        results.chatgpt.status = "已解锁";
+        results.chatgpt.color = "#34C759";
       } else if (resp.status === 403) {
         results.chatgpt.status = "未解锁";
         results.chatgpt.color = "#FF3B30";
       } else {
-        results.chatgpt.status = "异常";
+        results.chatgpt.status = "异常(" + resp.status + ")";
         results.chatgpt.color = "#FF9500";
       }
     } catch {
@@ -52,7 +57,7 @@ export default async function (ctx) {
         results.gemini.status = "未解锁";
         results.gemini.color = "#FF3B30";
       } else {
-        results.gemini.status = "异常";
+        results.gemini.status = "异常(" + resp.status + ")";
         results.gemini.color = "#FF9500";
       }
     } catch {
@@ -62,12 +67,12 @@ export default async function (ctx) {
   }
 
   // 并行执行检测
-  const [region] = await Promise.all([
-    getRegion(),
+  await Promise.all([
     checkChatGPT(),
     checkGemini(),
   ]);
-
+  // 获取区域信息
+  const region = getRegion();
   results.chatgpt.region = region;
   results.gemini.region = region;
 
@@ -105,7 +110,7 @@ export default async function (ctx) {
           children: [
             { type: "text", text: "ChatGPT", font: { size: "footnote", weight: "medium" } },
             { type: "spacer" },
-            { type: "text", text: `${results.chatgpt.status},${results.chatgpt.region}`, font: { size: "caption2" }, textColor: results.chatgpt.color },
+            { type: "text", text: `${results.chatgpt.status}, ${results.chatgpt.region}`, font: { size: "caption2" }, textColor: results.chatgpt.color },
           ],
         },
         {
@@ -116,7 +121,7 @@ export default async function (ctx) {
           children: [
             { type: "text", text: "Gemini", font: { size: "footnote", weight: "medium" } },
             { type: "spacer" },
-            { type: "text", text: `${results.gemini.status},${results.gemini.region}`, font: { size: "caption2" }, textColor: results.gemini.color },
+            { type: "text", text: `${results.gemini.status}, ${results.gemini.region}`, font: { size: "caption2" }, textColor: results.gemini.color },
           ],
         },
       ],
@@ -182,7 +187,7 @@ export default async function (ctx) {
               },
               {
                 type: "text",
-                text: `${results.chatgpt.status},区域:${results.chatgpt.region}`,
+                text: `${results.chatgpt.status}, 区域:${results.chatgpt.region}`,
                 font: { size: "subheadline", weight: "semibold" },
                 textColor: results.chatgpt.color,
               },
@@ -209,7 +214,7 @@ export default async function (ctx) {
               },
               {
                 type: "text",
-                text: `${results.gemini.status},区域:${results.gemini.region}`,
+                text: `${results.gemini.status}, 区域:${results.gemini.region}`,
                 font: { size: "subheadline", weight: "semibold" },
                 textColor: results.gemini.color,
               },

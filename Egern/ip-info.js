@@ -143,6 +143,136 @@ function normalizeAttribute(value, fallback = "公开接口") {
   return firstString(value);
 }
 
+function bool(value) {
+  return value === true || value === "true" || value === 1 || value === "1";
+}
+
+function classifyPrivacy(privacy) {
+  if (!privacy || typeof privacy !== "object") return null;
+  const service = firstString(privacy.service);
+  if (bool(privacy.tor)) {
+    return {
+      attribute: service ? `Tor · ${service}` : "Tor 出口",
+      risk: { label: "3 - 高风险", level: "failure", color: COLORS.failure },
+      source: "IPinfo Privacy",
+    };
+  }
+  if (bool(privacy.proxy) || bool(privacy.vpn)) {
+    return {
+      attribute: service ? `代理/VPN · ${service}` : "代理/VPN",
+      risk: { label: "3 - 高风险", level: "failure", color: COLORS.failure },
+      source: "IPinfo Privacy",
+    };
+  }
+  if (bool(privacy.hosting) || bool(privacy.relay)) {
+    return {
+      attribute: service ? `机房/托管 · ${service}` : "机房/托管",
+      risk: { label: "2 - 中风险", level: "warning", color: COLORS.warning },
+      source: "IPinfo Privacy",
+    };
+  }
+  return {
+    attribute: "原生/普通网络",
+    risk: { label: "1 - 低风险", level: "success", color: COLORS.success },
+    source: "IPinfo Privacy",
+  };
+}
+
+function classifyByNetwork(name) {
+  const textValue = firstString(name).toLowerCase();
+  if (!textValue) return null;
+  const hostingMarkers = [
+    "amazon",
+    "aws",
+    "azure",
+    "google cloud",
+    "cloudflare",
+    "digitalocean",
+    "linode",
+    "vultr",
+    "ovh",
+    "hetzner",
+    "leaseweb",
+    "colo",
+    "hosting",
+    "datacenter",
+    "data center",
+    "server",
+    "cloud",
+  ];
+  const residentialMarkers = [
+    "telecom",
+    "communications",
+    "broadband",
+    "mobile",
+    "wireless",
+    "cable",
+    "hkt",
+    "pccw",
+    "hinet",
+    "softbank",
+    "docomo",
+    "kddi",
+    "comcast",
+    "verizon",
+    "att",
+    "spectrum",
+  ];
+  if (hostingMarkers.some((marker) => textValue.includes(marker))) {
+    return {
+      attribute: "机房/托管",
+      risk: { label: "2 - 基础判断", level: "warning", color: COLORS.warning },
+      source: "ASN 基础判断",
+    };
+  }
+  if (residentialMarkers.some((marker) => textValue.includes(marker))) {
+    return {
+      attribute: "住宅/运营商网络",
+      risk: { label: "1 - 基础纯净", level: "success", color: COLORS.success },
+      source: "ASN 基础判断",
+    };
+  }
+  return {
+    attribute: "普通网络",
+    risk: { label: "1 - 基础判断", level: "success", color: COLORS.success },
+    source: "ASN 基础判断",
+  };
+}
+
+function classifyFromData(data, baseInfo) {
+  const privacy = data.privacy || data.security || data.anonymous || data.risk;
+  const privacyResult = classifyPrivacy(privacy);
+  if (privacyResult) return privacyResult;
+  const explicitAttribute = firstString(
+    data.attribute,
+    data.ip_type,
+    data.type,
+    data.usage_type,
+    data.company && data.company.type,
+    data.asn && data.asn.type,
+  );
+  const explicitRisk = firstString(data.risk_label, data.risk_level, data.score);
+  if (explicitAttribute || explicitRisk) {
+    return {
+      attribute: normalizeAttribute(explicitAttribute, baseInfo.attribute),
+      risk: normalizeRisk(explicitRisk || baseInfo.risk.label),
+      source: "高级接口",
+    };
+  }
+  return classifyByNetwork(
+    firstString(
+      data.isp,
+      data.as_name,
+      data.org,
+      data.organization,
+      data.company && data.company.name,
+      data.asn && data.asn.name,
+      baseInfo.organization,
+      baseInfo.isp,
+    ),
+  );
+}
+
 function parseIPFromText(textValue) {
   const match = String(textValue || "").match(IP_PATTERN);
   return match ? match[0] : "";
@@ -207,43 +337,48 @@ function mergeLookupInfo(info, lookup) {
   };
 }
 
+function applyBasicClassification(info) {
+  if (info.risk && info.risk.level !== "unknown" && info.attribute && info.attribute !== "公开接口") {
+    return info;
+  }
+  const classification = classifyByNetwork(firstString(info.organization, info.isp));
+  if (!classification) return info;
+  return {
+    ...info,
+    source: classification.source,
+    attribute: classification.attribute,
+    risk: classification.risk,
+    statusText: classification.risk.label,
+  };
+}
+
 function parseAdvancedInfo(ip, payload, baseInfo) {
-  const data = payload.data || payload.result || payload.ip || payload;
+  const data = payload.data || payload.result || payload;
   const geo = data.geo || data.location || data.region || {};
   const network = data.network || data.connection || data.asn || {};
-  const riskData = data.risk || data.security || data.score || {};
-  const asn = firstNumber(data.asn, data.as, network.asn, network.number, baseInfo.asn);
-  const countryCode = firstString(data.country_code, data.countryCode, geo.country_code, baseInfo.countryCode);
-  const country = firstString(data.country, data.country_name, geo.country, baseInfo.country);
+  const company = data.company || {};
+  const asn = firstNumber(data.asn, data.as, network.asn, network.number, network.asn_id, baseInfo.asn);
+  const countryCode = firstString(data.country_code, data.countryCode, geo.country_code, geo.country, baseInfo.countryCode);
+  const country = firstString(data.country, data.country_name, geo.country_name, geo.country, baseInfo.country);
   const region = firstString(data.region, data.region_name, geo.region);
   const city = firstString(data.city, geo.city);
   const location = firstString(data.location_text, data.location, [city, region, country].filter(Boolean).join(", "), baseInfo.location);
-  const attribute = normalizeAttribute(
-    firstString(
-      data.attribute,
-      data.ip_type,
-      data.type,
-      data.usage_type,
-      network.type,
-      riskData.type,
-      baseInfo.attribute,
-    ),
-    baseInfo.attribute,
-  );
-  const risk = normalizeRisk(
-    firstString(data.risk_label, data.risk, data.risk_level, data.score, riskData.level, riskData.score, baseInfo.risk.label),
-  );
+  const classification = classifyFromData(data, baseInfo) || {
+    attribute: baseInfo.attribute,
+    risk: baseInfo.risk,
+    source: baseInfo.source,
+  };
   return {
     ip,
-    source: data.as_name || data.as_domain ? "IPinfo Lite" : "高级接口",
-    statusText: risk.level === "unknown" ? "高级信息" : risk.label,
-    isp: firstString(data.isp, data.as_name, network.isp, data.org, data.organization, baseInfo.isp, "未知"),
-    organization: firstString(data.organization, data.org, data.as_name, network.org, network.organization, baseInfo.organization, "未知"),
+    source: classification.source || (data.as_name || data.as_domain ? "IPinfo Lite" : "高级接口"),
+    statusText: classification.risk.level === "unknown" ? "高级信息" : classification.risk.label,
+    isp: firstString(data.isp, data.as_name, network.isp, network.name, company.name, data.org, data.organization, baseInfo.isp, "未知"),
+    organization: firstString(data.organization, data.org, company.name, data.as_name, network.org, network.organization, network.name, baseInfo.organization, "未知"),
     asn,
     countryCode,
     location,
-    attribute,
-    risk,
+    attribute: classification.attribute,
+    risk: classification.risk,
     detail: "高级接口查询成功",
   };
 }
@@ -312,22 +447,34 @@ async function queryPublicInfo(ctx, policy, timeout, ip) {
 }
 
 async function queryAdvancedInfo(ctx, policy, timeout, endpoint, token, ip, baseInfo) {
-  const url = endpoint && endpoint.includes("{ip}") ? buildAdvancedURL(endpoint, ip) : buildIPInfoLiteURL(ip, token);
-  if (!url) return { ok: false, info: baseInfo, skipped: true };
+  const urls = [];
+  if (endpoint && endpoint.includes("{ip}")) {
+    urls.push(buildAdvancedURL(endpoint, ip));
+  } else if (token) {
+    urls.push(`https://api.ipinfo.io/lookup/${encodeURIComponent(ip)}?token=${encodeURIComponent(token)}`);
+    urls.push(buildIPInfoLiteURL(ip, token));
+  }
+  if (urls.length === 0) return { ok: false, info: baseInfo, skipped: true };
   const headers = token ? { Authorization: `Bearer ${token}`, "X-API-Key": token } : {};
-  const response = await getJSON(ctx, url, makeRequestOptions(policy, timeout, { headers }));
-  if (!response.ok || !response.data) {
-    return {
-      ok: false,
-      info: baseInfo,
-      error: response.error || `HTTP ${response.status}`,
-      latency: response.latency,
-    };
+  let latency = 0;
+  const errors = [];
+  for (const url of urls) {
+    const response = await getJSON(ctx, url, makeRequestOptions(policy, timeout, { headers }));
+    latency += response.latency;
+    if (response.ok && response.data) {
+      return {
+        ok: true,
+        info: parseAdvancedInfo(ip, response.data, baseInfo),
+        latency,
+      };
+    }
+    errors.push(`${url}: ${response.error || `HTTP ${response.status}`}`);
   }
   return {
-    ok: true,
-    info: parseAdvancedInfo(ip, response.data, baseInfo),
-    latency: response.latency,
+    ok: false,
+    info: baseInfo,
+    error: errors.map(shortError).join("；"),
+    latency,
   };
 }
 
@@ -373,6 +520,8 @@ async function collectInfo(ctx, env) {
   } else if (endpoint && !advancedResult.skipped) {
     detail = `${detail}；高级接口已降级：${advancedResult.error}`;
   }
+  info = applyBasicClassification(info);
+  statusText = info.statusText || statusText;
 
   const available = publicResult.ok || Boolean(ipProbe.ip);
   const color = info.risk.level === "failure" ? COLORS.failure : info.risk.level === "warning" ? COLORS.warning : COLORS.success;
@@ -587,7 +736,14 @@ function renderMedium(info, refreshAfter) {
   const rows = [
     infoRow("ISP", info.isp),
     infoRow("ASN", asnText(info.asn), COLORS.teal),
-    infoRow(info.ok ? "位置" : "错误", info.ok || !info.showErrorDetail ? info.location : info.detail, info.ok ? COLORS.secondary : COLORS.failure),
+    ...(info.ok
+      ? [
+          infoRow("属性", `${info.attribute} · ${info.source}`, COLORS.success),
+          infoRow("风险", info.risk.label, info.risk.color),
+        ]
+      : [
+          infoRow("错误", info.showErrorDetail ? info.detail : info.location, COLORS.failure),
+        ]),
   ];
   return widgetBase(
     refreshAfter,

@@ -1,5 +1,5 @@
-name: "IP 信息检测"
-description: "检测当前出口或指定策略的 IP、ISP、ASN、地理位置和风险概览"
+name: "数据中心 DCH 检测"
+description: "检测本地与落地 IP、AI/流媒体解锁和出口风险"
 author: "fancha0"
 homepage: "https://github.com/fancha0/egern-mokuai"
 icon: "location.magnifyingglass"
@@ -28,11 +28,11 @@ env_schema:
       - "12000"
   IP_API_ENDPOINT:
     name: "IP/高级接口（可选）"
-    description: "可填纯 IP 接口或支持 {ip} 的情报 JSON 接口；留空且填 Token 时默认使用 IPinfo Lite"
+    description: "DCH 面板已内置检测源，通常留空"
     default_value: ""
   IP_API_TOKEN:
     name: "IPinfo Token（可选）"
-    description: "从 https://ipinfo.io/dashboard/token 获取；留空时使用公开接口"
+    description: "DCH 面板不需要填写；保留该项仅用于兼容旧配置"
     default_value: ""
   SHOW_ERROR_DETAIL:
     name: "显示错误详情"
@@ -57,5 +57,5 @@ scriptings:
       timeout: 20
 
 widgets:
-  - name: "IP 信息检测"
+  - name: "数据中心 DCH"
     script_name: "ip-info-widget"

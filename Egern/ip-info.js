@@ -18,6 +18,7 @@ const PUBLIC_IP_URLS = [
   "https://www.cloudflare.com/cdn-cgi/trace",
 ];
 const PUBLIC_INFO_URL = "https://ipwho.is";
+const IPINFO_DASHBOARD_URL = "https://ipinfo.io/dashboard/token";
 const IP_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\b|(?:[a-f0-9]{0,4}:){2,}[a-f0-9]{0,4}/i;
 
 function parseChoice(value, allowed, fallback) {
@@ -160,9 +161,15 @@ function parseIPPayload(textValue) {
 
 function buildAdvancedURL(endpoint, ip) {
   if (!endpoint) return "";
+  if (endpoint.includes(IPINFO_DASHBOARD_URL)) return "";
   if (endpoint.includes("{ip}")) return endpoint.replaceAll("{ip}", encodeURIComponent(ip));
   const separator = endpoint.includes("?") ? "&" : "?";
   return `${endpoint}${separator}ip=${encodeURIComponent(ip)}`;
+}
+
+function buildIPInfoLiteURL(ip, token) {
+  if (!token) return "";
+  return `https://api.ipinfo.io/lite/${encodeURIComponent(ip)}?token=${encodeURIComponent(token)}`;
 }
 
 function parsePublicInfo(ip, payload) {
@@ -228,10 +235,10 @@ function parseAdvancedInfo(ip, payload, baseInfo) {
   );
   return {
     ip,
-    source: "高级接口",
+    source: data.as_name || data.as_domain ? "IPinfo Lite" : "高级接口",
     statusText: risk.level === "unknown" ? "高级信息" : risk.label,
-    isp: firstString(data.isp, network.isp, data.org, data.organization, baseInfo.isp, "未知"),
-    organization: firstString(data.organization, data.org, network.org, network.organization, baseInfo.organization, "未知"),
+    isp: firstString(data.isp, data.as_name, network.isp, data.org, data.organization, baseInfo.isp, "未知"),
+    organization: firstString(data.organization, data.org, data.as_name, network.org, network.organization, baseInfo.organization, "未知"),
     asn,
     countryCode,
     location,
@@ -243,7 +250,7 @@ function parseAdvancedInfo(ip, payload, baseInfo) {
 
 function buildIPProbeURLs(endpoint) {
   const urls = [];
-  if (endpoint && !endpoint.includes("{ip}")) urls.push(endpoint);
+  if (endpoint && !endpoint.includes("{ip}") && !endpoint.includes(IPINFO_DASHBOARD_URL)) urls.push(endpoint);
   for (const url of PUBLIC_IP_URLS) {
     if (!urls.includes(url)) urls.push(url);
   }
@@ -295,8 +302,8 @@ async function queryPublicInfo(ctx, policy, timeout, ip) {
 }
 
 async function queryAdvancedInfo(ctx, policy, timeout, endpoint, token, ip, baseInfo) {
-  const url = buildAdvancedURL(endpoint, ip);
-  if (!url || !endpoint.includes("{ip}")) return { ok: false, info: baseInfo, skipped: true };
+  const url = endpoint && endpoint.includes("{ip}") ? buildAdvancedURL(endpoint, ip) : buildIPInfoLiteURL(ip, token);
+  if (!url) return { ok: false, info: baseInfo, skipped: true };
   const headers = token ? { Authorization: `Bearer ${token}`, "X-API-Key": token } : {};
   const response = await getJSON(ctx, url, makeRequestOptions(policy, timeout, { headers }));
   if (!response.ok || !response.data) {
